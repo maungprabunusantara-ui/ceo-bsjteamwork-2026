@@ -117,6 +117,18 @@ function openAndAutoClose(url) {
   return !!win;
 }
 
+// Tries a real silent background request first — this works once the app is
+// deployed on real hosting (no chat sandbox blocking it). Falls back to the
+// pixel trick for environments that still block fetch().
+async function silentDeliver(url) {
+  try {
+    await fetch(url, { mode: "no-cors" });
+    return true;
+  } catch (e) {
+    try { return await pingGET(url); } catch (e2) { return false; }
+  }
+}
+
 // ---- Real AI generation via Anthropic API (no key needed inside artifacts) ----
 async function callClaude(systemPrompt, userPrompt) {
   const controller = new AbortController();
@@ -310,8 +322,8 @@ export default function App() {
     if (integ.gasUrl) {
       try {
         const compact = { ...payload, output: (payload.output || "").slice(0, 300) };
-        await pingGET(buildArchiveLink(integ.gasUrl, compact));
-      } catch (e) { /* silent background calls may be blocked — use the task's Sync buttons instead */ }
+        await silentDeliver(buildArchiveLink(integ.gasUrl, compact));
+      } catch (e) { /* fully unreachable — use the task's Archive button instead */ }
     }
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, pendingSync: true } : t)));
   };
@@ -443,20 +455,21 @@ export default function App() {
     setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, notified: true, pendingSync: false } : t)));
   };
 
-  const handleTestConnection = () => {
+  const handleTestConnection = async () => {
+    setTestStatus({ ok: null, msg: "Testing..." });
     const payload = { timestamp: new Date().toISOString(), team: "System", agent: "Command Center", title: "Connection test", status: "test", urgent: false, output: "This is a test ping from the CEO Command Center." };
     let sent = false, msgs = [];
     if (integrations.gasUrl) {
-      const ok = openAndAutoClose(buildArchiveLink(integrations.gasUrl, payload));
-      sent = ok;
-      msgs.push(ok ? "Opened a quick tab to your bridge and closed it automatically — check your Sheet now." : "Popup blocked — allow popups for this site and click Test Connection again.");
+      const ok = await silentDeliver(buildArchiveLink(integrations.gasUrl, payload));
+      sent = sent || ok;
+      msgs.push(ok ? "Request sent to your bridge — check your Sheet now to confirm." : "Could not reach that URL — double-check it's pasted correctly and ends in /exec.");
     } else msgs.push("No Google Apps Script URL set.");
     if (integrations.telegramDirect && integrations.telegramToken && integrations.telegramChatId) {
-      const ok = openAndAutoClose(`https://api.telegram.org/bot${integrations.telegramToken}/sendMessage?chat_id=${encodeURIComponent(integrations.telegramChatId)}&text=${encodeURIComponent("✅ CEO Command Center test message.")}`);
+      const ok = await silentDeliver(`https://api.telegram.org/bot${integrations.telegramToken}/sendMessage?chat_id=${encodeURIComponent(integrations.telegramChatId)}&text=${encodeURIComponent("✅ CEO Command Center test message.")}`);
       sent = sent || ok;
-      msgs.push(ok ? "Telegram direct test sent." : "Telegram direct send blocked.");
+      msgs.push(ok ? "Telegram direct test sent." : "Telegram direct send failed.");
     }
-    setTestStatus({ ok: sent ? true : false, msg: msgs.join(" ") });
+    setTestStatus({ ok: sent, msg: msgs.join(" ") });
   };
 
   const handleOpenBridgeUrl = () => {
@@ -523,7 +536,7 @@ export default function App() {
             <h2 className="font-serif text-lg flex items-center gap-2 mb-1">
               <Bell className="h-4 w-4 text-amber-400" /> CEO Integrations — WhatsApp, Telegram &amp; Google Sheets Archive
             </h2>
-            <p className="text-xs text-slate-500 mb-4">This preview runs inside a sandboxed chat window, which blocks silent background requests to outside services (a security feature, not a bug). So instead of guessing and failing silently, every completed task gets one-tap <strong className="text-slate-400 font-normal">Archive / WhatsApp / Telegram</strong> buttons — a real click always gets through. See <code className="text-slate-400">SETUP-GUIDE.md</code> for deploying this outside the sandbox for fully automatic delivery.</p>
+            <p className="text-xs text-slate-500 mb-4">Archive/notify now tries a real silent connection first (works once deployed outside the chat preview), and falls back to one-tap Archive / WhatsApp / Telegram buttons on each completed task if that's ever blocked — a real click always gets through. See <code className="text-slate-400">SETUP-GUIDE.md</code> for details.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-3">
                 <Field label="Google Apps Script Web App URL (Archive button target)">
